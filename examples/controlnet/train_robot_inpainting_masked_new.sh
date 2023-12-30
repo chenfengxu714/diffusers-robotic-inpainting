@@ -16,8 +16,8 @@ CUDA_VISIBLE_DEVICES=0 accelerate launch train_controlnet_robotics.py \
  --resolution=256 \
  --max_train_steps=10000 \
  --learning_rate=5e-5 \
- --validation_image "/home/lawrence/diffusers-robotic-inpainting/data/success_trajs_withposeanddepth_256/masked_images/10/34.jpg" \
- --validation_mask "/home/lawrence/diffusers-robotic-inpainting/data/success_trajs_withposeanddepth_256/union_mask/10/34.jpg" \
+ --validation_image "/home/lawrence/diffusers-robotic-inpainting/data/success_trajs_withposeanddepth_256/masked_images/1/34.jpg" \
+ --validation_mask "/home/lawrence/diffusers-robotic-inpainting/data/success_trajs_withposeanddepth_256/union_mask/1/34.jpg" \
  --validation_prompt "create a high quality image with a Franka Panda robot, a table, and a red cube on the table" \
  --validation_steps=1 \
  --train_batch_size=64 \
