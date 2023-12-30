@@ -120,22 +120,30 @@ def log_validation(vae, text_encoder, tokenizer, unet, controlnet, args, acceler
             "number of `args.validation_image` and `args.validation_prompt` should be checked in `parse_args`"
         )
 
+    if len(args.validation_image) == len(args.validation_mask):        
+        validation_masks = args.validation_mask
+    elif len(args.validation_mask) == 1:
+        validation_masks = args.validation_mask * len(args.validation_image)
+    else:
+        print("number of `args.validation_image` and `args.validation_mask` should be checked in `parse_args`")
+        
     image_logs = []
 
-    for validation_prompt, validation_image in zip(validation_prompts, validation_images):
+    for validation_prompt, validation_image, validation_mask in zip(validation_prompts, validation_images, validation_masks):
         validation_image = Image.open(validation_image).convert("RGB")
+        validation_mask = Image.open(validation_mask).convert("RGB")
 
         images = []
-        if masks is None:
-            masks = Image.new("L", validation_image.size, 0)
+        if validation_mask is None:
+            validation_mask = Image.new("L", validation_image.size, 0)
 
         for _ in range(args.num_validation_images):
             with torch.autocast("cuda"):
                 image = pipeline(
                     prompt=validation_prompt, 
                     image=validation_image, 
-                    mask_image=masks, 
-                    control_image=validation_image,
+                    mask_image=validation_mask, 
+                    control_image=validation_image.copy(),
                     num_inference_steps=20, 
                     generator=generator
                 ).images[0]
@@ -143,7 +151,7 @@ def log_validation(vae, text_encoder, tokenizer, unet, controlnet, args, acceler
             images.append(image)
 
         image_logs.append(
-            {"validation_image": validation_image, "images": images, "validation_prompt": validation_prompt}
+            {"validation_image": validation_image, "validation_mask": validation_mask, "images": images, "validation_prompt": validation_prompt}
         )
 
     for tracker in accelerator.trackers:
@@ -152,10 +160,12 @@ def log_validation(vae, text_encoder, tokenizer, unet, controlnet, args, acceler
                 images = log["images"]
                 validation_prompt = log["validation_prompt"]
                 validation_image = log["validation_image"]
+                validation_mask = log["validation_mask"]
 
                 formatted_images = []
 
                 formatted_images.append(np.asarray(validation_image))
+                formatted_images.append(np.asarray(validation_mask))
 
                 for image in images:
                     formatted_images.append(np.asarray(image))
@@ -170,8 +180,10 @@ def log_validation(vae, text_encoder, tokenizer, unet, controlnet, args, acceler
                 images = log["images"]
                 validation_prompt = log["validation_prompt"]
                 validation_image = log["validation_image"]
+                validation_mask = log["validation_mask"]
 
-                formatted_images.append(wandb.Image(validation_image, caption="Controlnet conditioning"))
+                formatted_images.append(wandb.Image(validation_image, caption="Input image"))
+                formatted_images.append(wandb.Image(validation_mask, caption="Mask image"))
 
                 for image in images:
                     image = wandb.Image(image, caption=validation_prompt)
@@ -183,7 +195,7 @@ def log_validation(vae, text_encoder, tokenizer, unet, controlnet, args, acceler
 
         return image_logs
 
-def prepare_mask_and_masked_image(image, mask):
+def prepare_mask_and_masked_image_deprecated(pil_image, pil_mask):
     image = np.array(image.convert("RGB"))
     image = image[None].transpose(0, 3, 1, 2)
     image = torch.from_numpy(image).to(dtype=torch.float32) / 127.5 - 1.0
@@ -198,6 +210,19 @@ def prepare_mask_and_masked_image(image, mask):
     masked_image = image * (mask < 0.5)
 
     return mask, masked_image
+
+def prepare_mask_and_masked_image(torch_image, mask):
+    mask = np.array(mask.convert("L"))
+    mask = mask.astype(np.float32) / 255.0
+    mask = mask[None, None]
+    mask[mask < 0.5] = 0
+    mask[mask >= 0.5] = 1
+    mask = torch.from_numpy(mask)
+
+    masked_image = torch_image * (mask < 0.5)
+
+    return mask, masked_image
+
 
 # generate random masks
 def random_mask(im_shape, ratio=1, mask_full_image=False):
@@ -531,6 +556,18 @@ def parse_args(input_args=None):
         help="The column of the dataset containing a caption or a list of captions.",
     )
     parser.add_argument(
+        "--input_image_column",
+        type=str,
+        default="input_image",
+        help="The column of the dataset containing the input image.",
+    )
+    parser.add_argument(
+        "--mask_column",
+        type=str,
+        default="mask",
+        help="The column of the dataset containing the mask image.",
+    )
+    parser.add_argument(
         "--max_train_samples",
         type=int,
         default=None,
@@ -569,6 +606,18 @@ def parse_args(input_args=None):
         ),
     )
     parser.add_argument(
+        "--validation_mask",
+        type=str,
+        default=None,
+        nargs="+",
+        help=(
+            "A set of paths to the controlnet conditioning image be evaluated every `--validation_steps`"
+            " and logged to `--report_to`. Provide either a matching number of `--validation_prompt`s, a"
+            " a single `--validation_prompt` to be used with all `--validation_mask`s, or a single"
+            " `--validation_mask` that will be used with all `--validation_prompt`s."
+        ),
+    )
+    parser.add_argument(
         "--num_validation_images",
         type=int,
         default=4,
@@ -595,11 +644,11 @@ def parse_args(input_args=None):
     )
     
     parser.add_argument(
-        "--use_condition_as_masked_image",
+        "--use_condition_as_input_image",
         type=bool,
         default=True,
         help=(
-            "whether we should use the condition images as masked images"
+            "whether we should use the condition images as input images"
         ),
     )
     
@@ -699,6 +748,26 @@ def make_train_dataset(args, tokenizer, accelerator):
             raise ValueError(
                 f"`--conditioning_image_column` value '{args.conditioning_image_column}' not found in dataset columns. Dataset columns are: {', '.join(column_names)}"
             )
+    
+    if args.input_image_column is None:
+        input_image_column = column_names[3]
+        logger.info(f"input image column defaulting to {input_image_column}")
+    else:
+        input_image_column = args.input_image_column
+        if input_image_column not in column_names:
+            raise ValueError(
+                f"`--input_image_column` value '{args.input_image_column}' not found in dataset columns. Dataset columns are: {', '.join(column_names)}"
+            )
+            
+    if args.mask_column is None:
+        mask_column = column_names[4]
+        logger.info(f"mask column defaulting to {mask_column}")
+    else:
+        mask_column = args.mask_column
+        if mask_column not in column_names:
+            raise ValueError(
+                f"`--mask_column` value '{args.mask_column}' not found in dataset columns. Dataset columns are: {', '.join(column_names)}"
+            )
 
     def tokenize_captions(examples, is_train=True):
         captions = []
@@ -739,11 +808,18 @@ def make_train_dataset(args, tokenizer, accelerator):
     def preprocess_train(examples):
         images = [image.convert("RGB") for image in examples[image_column]]
         images = [image_transforms(image) for image in images]
+        
+        input_images = [image.convert("RGB") for image in examples[input_image_column]]
+        input_images = [image_transforms(image) for image in input_images]
+        
+        mask_images = [image.convert("L") for image in examples[mask_column]]        
 
         conditioning_images = [image.convert("RGB") for image in examples[conditioning_image_column]]
         conditioning_images = [conditioning_image_transforms(image) for image in conditioning_images]
 
         examples["pixel_values"] = images
+        examples["input_pixel_values"] = input_images
+        examples["masks"] = mask_images
         examples["conditioning_pixel_values"] = conditioning_images
         examples["input_ids"] = tokenize_captions(examples)
 
@@ -760,7 +836,7 @@ def make_train_dataset(args, tokenizer, accelerator):
 
 def collate_fn(examples):
     pixel_values = torch.stack([example["pixel_values"] for example in examples])
-    pixel_values = pixel_values.to(memory_format=torch.contiguous_format).float()
+    pixel_values = pixel_values.to(memory_format=torch.contiguous_format).float() # B, C, H, W
 
     conditioning_pixel_values = torch.stack([example["conditioning_pixel_values"] for example in examples])
     conditioning_pixel_values = conditioning_pixel_values.to(memory_format=torch.contiguous_format).float()
@@ -770,15 +846,17 @@ def collate_fn(examples):
     masks = []
     masked_images = []
     for example in examples:
-        if args.use_condition_as_masked_image:
-            pil_image = example["conditioning_pixel_values"]
+        if args.use_condition_as_input_image:
+            input_image = example["conditioning_pixel_values"]
         else:
-            pil_image = example["masked_images"]
+            input_image = example["input_pixel_values"]
         # generate a random mask
         if 'masks' not in example.keys():
-            mask = random_mask(pil_image.size, 1, False)
+            mask = random_mask((pixel_values.shape[-2], pixel_values.shape[-1]), 1, False)
+        else:
+            mask = example["masks"]
         # prepare mask and masked image
-        mask, masked_image = prepare_mask_and_masked_image(pil_image, mask)
+        mask, masked_image = prepare_mask_and_masked_image(input_image, mask)
 
         masks.append(mask)
         masked_images.append(masked_image)
@@ -1024,6 +1102,7 @@ def main(args):
         # tensorboard cannot handle list types for config
         tracker_config.pop("validation_prompt")
         tracker_config.pop("validation_image")
+        tracker_config.pop("validation_mask")
 
         accelerator.init_trackers(args.tracker_project_name, config=tracker_config)
 
@@ -1116,8 +1195,8 @@ def main(args):
 
                 controlnet_image = batch["conditioning_pixel_values"].to(dtype=weight_dtype)
                 
-                if batch["condition_masks"] is None:
-                    masks = torch.ones(controlnet_images.shape).mean(dim=1, keep_dim=True).to(weight_dtype))
+                # if batch["condition_masks"] is None:
+                #     masks = torch.ones(controlnet_image.shape).mean(dim=1, keep_dim=True).to(weight_dtype)
                
                 # concatnate the original image embedding and the noise.
                
