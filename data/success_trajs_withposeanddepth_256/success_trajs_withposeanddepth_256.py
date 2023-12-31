@@ -22,6 +22,11 @@ _CITATION = "TODO"
 # "mask" (mask): all 0s (everything is black, meaning not masked)
 # "conditioning_image" (analytically inpainted): franka_analytic_inpainted
 
+# For img2img translation, the 4 images are
+# "image" (ground truth image): franka_rgb
+# "input_image" (image to be masked): ur5_rgb
+# "mask" (mask): all 0s (everything is black, meaning not masked)
+# "conditioning_image" (image to be masked): ur5_rgb
 
 _FEATURES = datasets.Features(
     {
@@ -35,6 +40,7 @@ _FEATURES = datasets.Features(
 
 METADATA_PATH = "/home/lawrence/diffusers-robotic-inpainting/data/success_trajs_withposeanddepth_256/paired_images_mask_inpaint_new.jsonl"
 # METADATA_PATH = "/home/lawrence/diffusers-robotic-inpainting/data/success_trajs_withposeanddepth_256/paired_images_analytic_improve_new.jsonl"
+# METADATA_PATH = "/home/lawrence/diffusers-robotic-inpainting/data/success_trajs_withposeanddepth_256/paired_images_ur5e_all_new.jsonl"
 
 # 1. image is always the ground truth image
 IMAGES_PATH = "/home/lawrence/diffusers-robotic-inpainting/data/success_trajs_withposeanddepth_256/franka_rgb"
