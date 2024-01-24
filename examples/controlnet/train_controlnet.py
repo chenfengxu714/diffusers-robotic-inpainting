@@ -44,6 +44,7 @@ from diffusers import (
     ControlNetModel,
     DDPMScheduler,
     StableDiffusionControlNetPipeline,
+    StableDiffusionControlNetImg2ImgPipeline,
     UNet2DConditionModel,
     UniPCMultistepScheduler,
 )
@@ -77,7 +78,7 @@ def log_validation(vae, text_encoder, tokenizer, unet, controlnet, args, acceler
 
     controlnet = accelerator.unwrap_model(controlnet)
 
-    pipeline = StableDiffusionControlNetPipeline.from_pretrained(
+    pipeline = StableDiffusionControlNetImg2ImgPipeline.from_pretrained(
         args.pretrained_model_name_or_path,
         vae=vae,
         text_encoder=text_encoder,
@@ -124,8 +125,15 @@ def log_validation(vae, text_encoder, tokenizer, unet, controlnet, args, acceler
 
         for _ in range(args.num_validation_images):
             with torch.autocast("cuda"):
+                # image = pipeline(
+                #     validation_prompt, validation_image, num_inference_steps=20, generator=generator
+                # ).images[0]
                 image = pipeline(
-                    validation_prompt, validation_image, num_inference_steps=20, generator=generator
+                    prompt=validation_prompt, 
+                    image=validation_image, 
+                    control_image=validation_image.copy(),
+                    num_inference_steps=20, 
+                    generator=generator
                 ).images[0]
 
             images.append(image)
@@ -148,6 +156,9 @@ def log_validation(vae, text_encoder, tokenizer, unet, controlnet, args, acceler
                 for image in images:
                     formatted_images.append(np.asarray(image))
 
+                if formatted_images[0].shape[0] != formatted_images[1].shape[0]:
+                    formatted_images[0] = np.asarray(np.asarray(validation_image).copy().resize((formatted_images[1].shape[0], formatted_images[1].shape[1])))
+                 
                 formatted_images = np.stack(formatted_images)
 
                 tracker.writer.add_images(validation_prompt, formatted_images, step, dataformats="NHWC")
