@@ -738,7 +738,7 @@ def patchify(imgs, patch_size=16):
     imgs: (N, 3, H, W)
     x: (N, L, patch_size**2 *3)
     """
-    p = patch_size[0]
+    p = patch_size
     assert imgs.shape[2] == imgs.shape[3] and imgs.shape[2] % p == 0
 
     h = w = imgs.shape[2] // p
@@ -752,7 +752,7 @@ def unpatchify(x, patch_size=16):
     x: (N, L, patch_size**2 *3)
     imgs: (N, 3, H, W)
     """
-    p = patch_size[0]
+    p = patch_size
     h = w = int(x.shape[1]**.5)
     assert h * w == x.shape[1]
         
@@ -1134,8 +1134,8 @@ def main(args):
 
                 controlnet_image = batch["conditioning_pixel_values"].to(dtype=weight_dtype)
 
-                controlnet_image_masked = random_masking(controlnet_image)
-                # controlnet_image_masks = random_masking_bottom(controlnet_image)
+                controlnet_image_masked_,_ = random_masking(controlnet_image)
+                # controlnet_image_masks,_,_ = random_masking_bottom(controlnet_image)
 
                 down_block_res_samples, mid_block_res_sample = controlnet(
                     noisy_latents,
