@@ -1134,8 +1134,8 @@ def main(args):
 
                 controlnet_image = batch["conditioning_pixel_values"].to(dtype=weight_dtype)
 
-                controlnet_image_masked_,_ = random_masking(controlnet_image)
-                # controlnet_image_masks,_,_ = random_masking_bottom(controlnet_image)
+                controlnet_image_masked, _, _ = random_masking(controlnet_image)
+                # controlnet_image_masks, _, _ = random_masking_bottom(controlnet_image)
 
                 down_block_res_samples, mid_block_res_sample = controlnet(
                     noisy_latents,
