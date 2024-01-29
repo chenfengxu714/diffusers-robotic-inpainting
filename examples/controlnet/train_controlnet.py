@@ -78,7 +78,7 @@ def log_validation(vae, text_encoder, tokenizer, unet, controlnet, args, acceler
 
     controlnet = accelerator.unwrap_model(controlnet)
 
-    pipeline = StableDiffusionControlNetImg2ImgPipeline.from_pretrained(
+    pipeline = StableDiffusionControlNetPipeline.from_pretrained(
         args.pretrained_model_name_or_path,
         vae=vae,
         text_encoder=text_encoder,
@@ -122,24 +122,31 @@ def log_validation(vae, text_encoder, tokenizer, unet, controlnet, args, acceler
         validation_image = Image.open(validation_image).convert("RGB")
 
         images = []
-
+        validation_images_masked = []
         for _ in range(args.num_validation_images):
             with torch.autocast("cuda"):
                 # image = pipeline(
                 #     validation_prompt, validation_image, num_inference_steps=20, generator=generator
                 # ).images[0]
+                
+                # convert validation_image to tensor of shape (N, 3, H, W)
+                validation_image_tensor = transforms.ToTensor()(validation_image).unsqueeze(0)
+                validation_image_masked_tensor, _, _ = random_masking(validation_image_tensor)
+                # change the tensor (N, 3, H, W) back to an image
+                validation_image_masked = transforms.ToPILImage()(validation_image_masked_tensor.squeeze(0))
                 image = pipeline(
                     prompt=validation_prompt, 
-                    image=validation_image, 
-                    control_image=validation_image.copy(),
+                    image=validation_image_masked, 
+                    control_image=validation_image_masked.copy(),
                     num_inference_steps=20, 
                     generator=generator
                 ).images[0]
 
             images.append(image)
+            validation_images_masked.append(validation_images_masked)
 
         image_logs.append(
-            {"validation_image": validation_image, "images": images, "validation_prompt": validation_prompt}
+            {"validation_image": validation_image, "validation_images_masked": validation_images_masked, "images": images, "validation_prompt": validation_prompt}
         )
 
     for tracker in accelerator.trackers:
