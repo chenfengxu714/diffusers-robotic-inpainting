@@ -55,7 +55,6 @@ from diffusers.utils.import_utils import is_xformers_available
 
 if is_wandb_available():
     import wandb
-    # wandb.init(entity="xembody")
 
 # Will error if the minimal version of diffusers is not installed. Remove at your own risks.
 check_min_version("0.25.0.dev0")
@@ -79,7 +78,7 @@ def log_validation(vae, text_encoder, tokenizer, unet, controlnet, args, acceler
 
     controlnet = accelerator.unwrap_model(controlnet)
 
-    pipeline = StableDiffusionControlNetImg2ImgPipeline.from_pretrained(
+    pipeline = StableDiffusionControlNetPipeline.from_pretrained(
         args.pretrained_model_name_or_path,
         vae=vae,
         text_encoder=text_encoder,
@@ -122,26 +121,32 @@ def log_validation(vae, text_encoder, tokenizer, unet, controlnet, args, acceler
     for validation_prompt, validation_image in zip(validation_prompts, validation_images):
         validation_image = Image.open(validation_image).convert("RGB")
 
-        # validation_image = validation_image.resize((256, 256))
-        # validation_image = ((np.array(validation_image) / 255.0 - 0.5) / 0.5)[None, ...]
         images = []
-
+        validation_images_masked = []
         for _ in range(args.num_validation_images):
             with torch.autocast("cuda"):
+                # image = pipeline(
+                #     validation_prompt, validation_image, num_inference_steps=20, generator=generator
+                # ).images[0]
+                
+                # convert validation_image to tensor of shape (N, 3, H, W)
+                validation_image_tensor = transforms.ToTensor()(validation_image).unsqueeze(0)
+                validation_image_masked_tensor, _, _ = random_masking(validation_image_tensor)
+                # change the tensor (N, 3, H, W) back to an image
+                validation_image_masked = transforms.ToPILImage()(validation_image_masked_tensor.squeeze(0))
                 image = pipeline(
                     prompt=validation_prompt, 
-                    image=validation_image, 
-                    control_image=validation_image.copy(),
+                    image=validation_image_masked, 
+                    control_image=validation_image_masked.copy(),
                     num_inference_steps=20, 
                     generator=generator
                 ).images[0]
-            # image = (image).clamp(0, 1).squeeze()
-            # image = (image.permute(1, 2, 0) * 255).round().to(torch.uint8).cpu().numpy()
-            # image = Image.fromarray(image)
+
             images.append(image)
+            validation_images_masked.append(validation_images_masked)
 
         image_logs.append(
-            {"validation_image": validation_image, "images": images, "validation_prompt": validation_prompt}
+            {"validation_image": validation_image, "validation_images_masked": validation_images_masked, "images": images, "validation_prompt": validation_prompt}
         )
 
     for tracker in accelerator.trackers:
@@ -157,11 +162,10 @@ def log_validation(vae, text_encoder, tokenizer, unet, controlnet, args, acceler
 
                 for image in images:
                     formatted_images.append(np.asarray(image))
-                
+
                 if formatted_images[0].shape[0] != formatted_images[1].shape[0]:
-                    breakpoint()
-                    formatted_images[0] = np.asarray(validation_image.resize((formatted_images[1].shape[0], formatted_images[1].shape[1])))
-                
+                    formatted_images[0] = np.asarray(np.asarray(validation_image).copy().resize((formatted_images[1].shape[0], formatted_images[1].shape[1])))
+                 
                 formatted_images = np.stack(formatted_images)
 
                 tracker.writer.add_images(validation_prompt, formatted_images, step, dataformats="NHWC")
@@ -557,6 +561,15 @@ def parse_args(input_args=None):
         ),
     )
 
+    parser.add_argument(
+        "--masks",
+        type=bool,
+        default=False,
+        help=(
+            "whether using mask strategy."
+        ),
+    )
+
     if input_args is not None:
         args = parser.parse_args(input_args)
     else:
@@ -726,6 +739,101 @@ def collate_fn(examples):
         "conditioning_pixel_values": conditioning_pixel_values,
         "input_ids": input_ids,
     }
+
+def patchify(imgs, patch_size=16):
+    """
+    imgs: (N, 3, H, W)
+    x: (N, L, patch_size**2 *3)
+    """
+    p = patch_size
+    assert imgs.shape[2] == imgs.shape[3] and imgs.shape[2] % p == 0
+
+    h = w = imgs.shape[2] // p
+    x = imgs.reshape(shape=(imgs.shape[0], 3, h, p, w, p))
+    x = torch.einsum('nchpwq->nhwpqc', x)
+    x = x.reshape(shape=(imgs.shape[0], h * w, p**2 * 3))
+    return x
+
+def unpatchify(x, patch_size=16):
+    """
+    x: (N, L, patch_size**2 *3)
+    imgs: (N, 3, H, W)
+    """
+    p = patch_size
+    h = w = int(x.shape[1]**.5)
+    assert h * w == x.shape[1]
+        
+    x = x.reshape(shape=(x.shape[0], h, w, p, p, 3))
+    x = torch.einsum('nhwpqc->nchpwq', x)
+    imgs = x.reshape(shape=(x.shape[0], 3, h * p, h * p))
+    return imgs
+
+def random_masking(controlnet_image, mask_ratio=0.5, patch_size=16):
+    """
+    Perform per-sample random masking by per-sample shuffling.
+    Per-sample shuffling is done by argsort random noise.
+    x: [N, L, D], sequence
+    """
+    x = patchify(controlnet_image, patch_size=patch_size)
+    N, L, D = x.shape  # batch, length, dim
+    len_keep = int(L * (1 - mask_ratio))
+        
+    noise = torch.rand(N, L, device=x.device)  # noise in [0, 1]
+        
+    # sort noise for each sample
+    ids_shuffle = torch.argsort(noise, dim=1)  # ascend: small is keep, large is remove
+    ids_restore = torch.argsort(ids_shuffle, dim=1)
+
+
+    # generate the binary mask: 0 is keep, 1 is remove
+    mask = torch.ones([N, L], device=x.device)
+    mask[:, :len_keep] = 0
+    # unshuffle to get the binary mask
+    mask = torch.gather(mask, dim=1, index=ids_restore)
+
+    mask = mask.unsqueeze(-1).repeat(1, 1, patch_size**2 *3)  # (N, H*W, p*p*3)
+    mask = unpatchify(mask, patch_size=patch_size)  # 1 is removing, 0 is keeping
+    # mask = torch.einsum('nchw->nhwc', mask).detach().cpu()
+    
+    # x = torch.einsum('nchw->nhwc', x)
+    masked_controlnet_image = controlnet_image * (1-mask) 
+    return masked_controlnet_image, mask, ids_restore
+
+def random_masking_bottom(controlnet_image, mask_ratio=0.5, patch_size=16):
+    """
+    Perform per-sample random masking by per-sample shuffling.
+    Per-sample shuffling is done by argsort random noise.
+    x: [N, L, D], sequence
+    """
+    x = patchify(controlnet_image, patch_size=patch_size)
+    N, L, D = x.shape  # batch, length, dim
+    len_keep = int(L * (1 - mask_ratio))
+        
+    noise = torch.rand(N, L, device=x.device)  # noise in [0, 1]
+    bottom_middle_start = int(L * 0.5)  # This is a rough estimate, adjust based on your patch layout
+    bottom_middle_end = int(L * 0.75)  # This is a rough estimate, adjust based on your patch layout
+    noise_mask = torch.ones(N, L, device=x.device)
+    noise_mask[:, bottom_middle_start:bottom_middle_end] += 5  # Increase noise intensity in this region
+    # Apply the mask to the base noise
+    noise = noise * noise_mask
+
+    # The rest of your noise application process remains the same
+    ids_shuffle = torch.argsort(noise, dim=1)
+    ids_restore = torch.argsort(ids_shuffle, dim=1)
+
+    # keep the first subset
+    ids_keep = ids_shuffle[:, :len_keep]
+    x_masked = torch.gather(x, dim=1, index=ids_keep.unsqueeze(-1).repeat(1, 1, D))
+
+    # generate the binary mask: 0 is keep, 1 is remove
+    mask = torch.ones([N, L], device=x.device)
+    mask[:, :len_keep] = 0
+    # unshuffle to get the binary mask
+    mask = torch.gather(mask, dim=1, index=ids_restore)
+    mask = mask.unsqueeze(-1).repeat(1, 1, patch_size**2 *3)  # (N, H*W, p*p*3)
+    mask = unpatchify(mask, patch_size)  # 1 is removing, 0 is keeping
+    masked_controlnet_image = controlnet_image * (1 - mask)
+    return masked_controlnet_image, mask, ids_restore
 
 
 def main(args):
@@ -1033,11 +1141,14 @@ def main(args):
 
                 controlnet_image = batch["conditioning_pixel_values"].to(dtype=weight_dtype)
 
+                controlnet_image_masked, _, _ = random_masking(controlnet_image)
+                # controlnet_image_masks, _, _ = random_masking_bottom(controlnet_image)
+
                 down_block_res_samples, mid_block_res_sample = controlnet(
                     noisy_latents,
                     timesteps,
                     encoder_hidden_states=encoder_hidden_states,
-                    controlnet_cond=controlnet_image,
+                    controlnet_cond=controlnet_image_masked if args.masks else controlnet_image,
                     return_dict=False,
                 )
 

@@ -144,6 +144,8 @@ runs
 
 # data
 # /data
+paired_images_all.jsonl
+**/output
 serialization_dir
 
 # emacs
