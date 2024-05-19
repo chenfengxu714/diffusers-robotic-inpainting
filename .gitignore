@@ -145,6 +145,9 @@ runs
 # data
 # /data
 paired_images_all.jsonl
+paired_images.jsonl
+*.jpg
+data/robot2robot
 **/output
 serialization_dir
 
