@@ -37,7 +37,7 @@ def trainer_robot(args, model, snapshot_path, multimask_output, low_res):
     num_classes = args.num_classes
     batch_size = args.batch_size * args.n_gpu
     # max_iterations = args.max_iterations
-    db_train = CompositeDataset(objects_dir=args.root_path, backgrounds_dir=args.bg_dir, low_res=low_res,
+    db_train = CompositeDataset(objects_dir=args.root_path, backgrounds_dir=args.bg_dir, low_res=low_res, img_size=(args.img_size, args.img_size)
                             )
     print("The length of train set is: {}".format(len(db_train)))
 

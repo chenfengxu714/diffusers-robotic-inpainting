@@ -27,16 +27,16 @@ def inference(args, multimask_output, db_config, model, test_save_path=None, tes
     for i_batch, sampled_batch in tqdm(enumerate(testloader)):
         image = sampled_batch['image'].cuda()
         file = sampled_batch['file_name']
-        image = torch.nn.functional.upsample_bilinear(image.float()/1.0, size=(256, 256))
+        image = torch.nn.functional.upsample_bilinear(image.float()/1.0, size=(args.img_size, args.img_size))
         outputs = model(image, multimask_output, args.img_size)
         
         output_masks = outputs['masks']
         
-        output_masks =  torch.nn.functional.upsample_bilinear(output_masks.float(), size=(256, 256))
+        output_masks =  torch.nn.functional.upsample_bilinear(output_masks.float(), size=(args.img_size, args.img_size))
         # output_masks = output_masks > 0.9
         # print(output_masks.shape)
         # output_masks = torch.argmax(torch.softmax(output_masks, dim=1), dim=1, keepdim=True)
-        output_masks = (output_masks[:, 1, :, :] > 0.6).unsqueeze(1)
+        output_masks = (output_masks[:, 1, :, :] > args.mask_threshold).unsqueeze(1)
         # masked_image[ == 1] = 1.0
         # image = torch.nn.functional.upsample_bilinear(image.float()/255.0, size=(224, 224))
         masked_image = (image/255.0) * output_masks
@@ -84,7 +84,7 @@ if __name__ == '__main__':
     parser.add_argument('--vit_name', type=str, default='vit_h', help='Select one vit model')
     parser.add_argument('--rank', type=int, default=4, help='Rank for LoRA adaptation')
     parser.add_argument('--module', type=str, default='sam_lora_image_encoder')
-
+    parser.add_argument('--mask_threshold', type=float, default=0.5)
     args = parser.parse_args()
 
     if args.config is not None:

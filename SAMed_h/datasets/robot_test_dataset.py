@@ -24,7 +24,7 @@ class Test_Robot_dataset(Dataset):
         # print(os.path.join(self.path, self.image_dir[idx]))
         path = os.path.join(self.path, self.image_dir[idx])
         file_name = path.split('/')[-1]
-        image = Image.open(os.path.join(self.path, self.image_dir[idx])).convert("RGB")  # Ensure image is RGB
+        image = Image.open(os.path.join(self.path, self.image_dir[idx]))  # Ensure image is RGB
         image = np.array(image)
         sample = {'image': torch.tensor(image).permute(2,0,1), 'file_name': file_name}
         return sample
