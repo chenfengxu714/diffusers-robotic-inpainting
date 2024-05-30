@@ -8,8 +8,8 @@ from PIL import Image
 
 # Paths and models
 base_model_path = "runwayml/stable-diffusion-v1-5"
-controlnet_path = "/rscratch/cfxu/diffusion-RL/style-transfer/data/controlnet"
-base_image_path = "/rscratch/cfxu/diffusion-RL/style-transfer/data/parsered_images_robo/2024-05-11-cup-franka-gripper-background_masks"
+controlnet_path = "/rscratch/cfxu/diffusion-RL/style-transfer/data/5-22-franka-ur5/controlnet"
+base_image_path = "/rscratch/cfxu/diffusion-RL/style-transfer/data/parsered_images_robo/2024-05-10-cup-franka-gripper_mask"
 # output_base_path = "/rscratch/cfxu/diffusion-RL/style-transfer/data/parsered_images_robo/2024-05-10-tiger-franka-gripper_masks"
 
 # Load ControlNet and pipeline
@@ -32,8 +32,9 @@ def load_images(image_paths):
 
 # Batch process images
 batch_size = 128  # Adjust batch size as needed
-prompt = "create a high quality image with a ur5 robot and white background"
-
+prompt = "create a high quality image with a franka robot and white background"
+to_tensor = transforms.ToTensor()
+to_pil = transforms.ToPILImage()
 for folder_name in list_of_folders:
     image_path = os.path.join(base_image_path, folder_name, 'r2r_images')
     output_folder = f"r2r_transferred"
@@ -63,7 +64,8 @@ for folder_name in list_of_folders:
             image=images, 
             control_image=images
         ).images
-        
+        generate_images = [to_pil(to_tensor(generated_image).clamp(0, 1)) for generated_image in generated_images]
+
         # Save the generated images
         for input_image, generated_image in zip(batch_images, generated_images):
             original_image = load_image(os.path.join(image_path, input_image))

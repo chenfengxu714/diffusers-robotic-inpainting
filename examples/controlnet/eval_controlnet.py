@@ -69,6 +69,8 @@ for i, input_image in enumerate(list_of_input_images):
     generated_image = pipe(
         prompt, num_inference_steps=50, generator=generator, image=image, control_image=image
     ).images[0]
+    pring(generate_image.min(), generate_image.max())
+    generate_image = generated_image.clamp(0, 1)
     # generated_image = pipe(
     #     prompt, num_inference_steps=50, generator=generator, image=image
     # ).images[0]
