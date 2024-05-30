@@ -13,7 +13,8 @@ def get_video_mask_pairs(base_dir, mask_dir):
             mask_path = os.path.join(mask_dir, dir_name, 'masks')
             save_path = os.path.join(mask_dir, dir_name, 'inpainted_frames')
             if os.path.isdir(video_path) and os.path.isdir(mask_path):
-                pairs.append((video_path, mask_path, save_path))
+                if not os.path.exists(save_path):
+                    pairs.append((video_path, mask_path, save_path))
     return pairs
 
 def run_command(video_path, mask_path, ckpt_path, save_frame_dir, width, height):
@@ -31,12 +32,13 @@ def run_command(video_path, mask_path, ckpt_path, save_frame_dir, width, height)
         '--height', str(height), 
         '--save_frame', save_frame_dir
     ]
+    os.environ['CUDA_VISIBLE_DEVICES'] = str(2)
     print(f"Running command: {' '.join(command)}")
     subprocess.run(command, check=True)
 
 def main():
-    base_dir = "/rscratch/cfxu/diffusion-RL/style-transfer/data/parsered_images_robo/2024-05-11-cup-franka-gripper-background"
-    mask_dir = "/rscratch/cfxu/diffusion-RL/style-transfer/data/parsered_images_robo/2024-05-11-cup-franka-gripper-background_masks"
+    base_dir = "/rscratch/cfxu/diffusion-RL/style-transfer/data/parsered_images_robo/2024-05-10-cup-franka-gripper"
+    mask_dir = "/rscratch/cfxu/diffusion-RL/style-transfer/data/parsered_images_robo/2024-05-10-cup-franka-gripper_mask"
     ckpt_path = "/rscratch/cfxu/diffusion-RL/style-transfer/E2FGVI/release_model/E2FGVI-HQ-CVPR22.pth"
     save_frame_base_dir = mask_dir
     width, height = 256, 256
