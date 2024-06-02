@@ -32,13 +32,13 @@ def run_command(video_path, mask_path, ckpt_path, save_frame_dir, width, height)
         '--height', str(height), 
         '--save_frame', save_frame_dir
     ]
-    os.environ['CUDA_VISIBLE_DEVICES'] = str(2)
+    os.environ['CUDA_VISIBLE_DEVICES'] = str(7)
     print(f"Running command: {' '.join(command)}")
     subprocess.run(command, check=True)
 
 def main():
-    base_dir = "/rscratch/cfxu/diffusion-RL/style-transfer/data/parsered_images_robo/2024-05-10-cup-franka-gripper"
-    mask_dir = "/rscratch/cfxu/diffusion-RL/style-transfer/data/parsered_images_robo/2024-05-10-cup-franka-gripper_mask"
+    base_dir = "/rscratch/cfxu/diffusion-RL/style-transfer/data/cloth_sweeping_images_left2/cloth_sweeping/raw"
+    mask_dir = "/rscratch/cfxu/diffusion-RL/style-transfer/data/cloth_sweeping_images_left2_masks/cloth_sweeping/raw"
     ckpt_path = "/rscratch/cfxu/diffusion-RL/style-transfer/E2FGVI/release_model/E2FGVI-HQ-CVPR22.pth"
     save_frame_base_dir = mask_dir
     width, height = 256, 256
