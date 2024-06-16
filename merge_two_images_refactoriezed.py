@@ -38,7 +38,7 @@ class ImageProcessor:
 
     def segment_object(self, image):
         hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
-        lower_bound = np.array([0, 0, 200])
+        lower_bound = np.array([0, 0, 230])
         upper_bound = np.array([180, 50, 255])
         
         color_mask = cv2.inRange(hsv, lower_bound, upper_bound)
@@ -57,48 +57,48 @@ class ImageProcessor:
         
         return final_mask
 
-    def paste_objects(self, backgrounds, objects, output_dir_base):
-        output_dir_brighted = f"{output_dir_base}_0"
-        output_dir_augmented = f"{output_dir_base}_30"
-        os.makedirs(output_dir_brighted, exist_ok=True)
-        os.makedirs(output_dir_augmented, exist_ok=True)
+    def paste_objects(self, background, object):
+        obj_image = object
+        background = background
+        obj_image = Image.fromarray(obj_image)
+        background = Image.fromarray(background)
         
-        if len(backgrounds) != len(objects):
-            print("Error: The number of background images does not match the number of object images.")
-            return
+        # obj_image = obj_image.crop((obj_image.width // 2, 0, obj_image.width, obj_image.height))
+        mask = self.segment_object(np.array(obj_image))
+        
+        # brightened_obj_image = self.change_brightness(np.array(obj_image), mean_value=50, randomness=0)
+        brightened_obj_image_augmented = self.change_brightness(np.array(obj_image), mean_value=50, randomness=30)
+        
+        mask = Image.fromarray(mask).convert("L")
 
-        for i, (background, obj_image) in enumerate(zip(backgrounds, objects)):
-            obj_image = Image.fromarray(obj_image)
-            background = Image.fromarray(background)
-            
-            obj_image = obj_image.crop((obj_image.width // 2, 0, obj_image.width, obj_image.height))
-            mask = self.segment_object(np.array(obj_image))
-            
-            brightened_obj_image = self.change_brightness(np.array(obj_image), mean_value=50, randomness=0)
-            brightened_obj_image_augmented = self.change_brightness(np.array(obj_image), mean_value=50, randomness=30)
-            
-            mask = Image.fromarray(mask).convert("L")
-            obj_image_brighted = Image.fromarray(brightened_obj_image).convert('RGBA')
-            obj_image_augmented = Image.fromarray(brightened_obj_image_augmented).convert('RGBA')
+        # Comment after debugging
+        # mask.save('test_mask.png')
 
-            if mask.size != obj_image_brighted.size:
-                mask = mask.resize(obj_image_brighted.size, Image.ANTIALIAS)
-            
-            # Save brightened images
-            brighted_background = background.copy()
-            brighted_background.paste(obj_image_brighted, (0, 0), mask)
-            output_filename_brighted = f"output_{i:04d}.png"
-            output_path_brighted = os.path.join(output_dir_brighted, output_filename_brighted)
-            brighted_background.save(output_path_brighted)
-            print(f"Saved {output_path_brighted}")
+        # obj_image_brighted = Image.fromarray(brightened_obj_image).convert('RGBA')
+        obj_image_augmented = Image.fromarray(brightened_obj_image_augmented).convert('RGBA')
+        # obj_image_augmented.save('test_obj.png')
 
-            # Save augmented images
-            augmented_background = background.copy()
-            augmented_background.paste(obj_image_augmented, (0, 0), mask)
-            output_filename_augmented = f"output_{i:04d}.png"
-            output_path_augmented = os.path.join(output_dir_augmented, output_filename_augmented)
-            augmented_background.save(output_path_augmented)
-            print(f"Saved {output_path_augmented}")
+        if mask.size != obj_image_augmented.size:
+            mask = mask.resize(obj_image_augmented.size, Image.ANTIALIAS)
+        
+        # Save brightened images
+        # brighted_background = background.copy()
+        # brighted_background.paste(obj_image_brighted, (0, 0), mask)
+        # # output_filename_brighted = f"output_{i:04d}.png"
+        # # output_path_brighted = os.path.join(output_dir_brighted, output_filename_brighted)
+        # brighted_background.save('test_brighted.png')
+        # print(f"Saved {output_path_brighted}")
+
+        # Save augmented images
+        augmented_background = background.copy()
+        augmented_background.paste(obj_image_augmented, (0, 0), mask)
+        # augmented_background.save('test_augmented.png')
+        # output_filename_augmented = f"output_0.png"
+        # output_path_augmented = os.path.join('./', output_filename_augmented)
+        # augmented_background.save(output_path_augmented)
+        # import pdb; pdb.set_trace()
+        # print(f"Saved {output_path_augmented}")
+        return np.array(augmented_background)
 
     def process_all_subfolders(self):
         for folder_name in os.listdir(self.base_dir):
@@ -114,7 +114,11 @@ class ImageProcessor:
                 else:
                     print(f"Missing inpainted_frames or r2r_transferred in {folder_path}")
 
-# Example usage
-base_dir = '/rscratch/cfxu/diffusion-RL/style-transfer/data/parsered_images_robo/2024-05-10-cup-franka-gripper_mask'
-processor = ImageProcessor(base_dir)
-processor.process_all_subfolders()
+if __name__ == "__main__":
+    # Example usage
+    base_dir = '/rscratch/cfxu/diffusion-RL/style-transfer/data/parsered_images_robo/2024-05-10-cup-franka-gripper_mask'
+    processor = ImageProcessor(base_dir)
+
+    test_background = np.array(Image.open('/home/kdharmarajan/mirage2/test/inpainted_background_78.png'))
+    test_object = np.array(Image.open('/home/kdharmarajan/mirage2/test/robot_aug_imgs_78.png'))
+    processor.paste_objects(test_background, test_object)

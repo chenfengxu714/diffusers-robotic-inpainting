@@ -12,14 +12,31 @@ import re
 from core.utils import to_tensors
 from torchvision.utils import save_image
 
+
 class VideoProcessor:
     def __init__(self, args):
         self.args = args
-        self.ref_length = args.step
-        self.num_ref = args.num_ref
-        self.neighbor_stride = args.neighbor_stride
-        self.default_fps = args.savefps
-        self.frame_save_dir = args.save_frame
+        self.ref_length = args['step']
+        self.num_ref = args['num_ref']
+        self.neighbor_stride = args['neighbor_stride']
+        self.default_fps = args['savefps']
+        self.frame_save_dir = args['save_frame']
+
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+        if self.args["model"] == "e2fgvi":
+            self.size = (432, 240)
+        elif self.args["set_size"]:
+            self.size = (self.args['width'], self.args['height'])
+        else:
+            self.size = None
+
+        self.net = importlib.import_module('model.' + self.args['model'])
+        self.model = self.net.InpaintGenerator().to(self.device)
+        self.data = torch.load(self.args['ckpt'], map_location=self.device)
+        self.model.load_state_dict(self.data)
+        self.model.eval()
+
 
     @staticmethod
     def natural_sort_key(s):
@@ -54,6 +71,17 @@ class VideoProcessor:
             masks.append(Image.fromarray(m * 255))
         return masks
 
+    def process_masks(self, masks):
+        new_masks = []
+        for i in range(masks.shape[0]):
+            m = Image.fromarray(masks[i])
+            m = m.resize(self.size, Image.NEAREST)
+            m = np.array(m.convert('L'))
+            m = np.array(m > 0).astype(np.uint8)
+            m = cv2.dilate(m, cv2.getStructuringElement(cv2.MORPH_CROSS, (3, 3)), iterations=4)
+            new_masks.append(Image.fromarray(m * 255))
+        return new_masks
+
     def read_frame_from_videos(self):
         vname = self.args.video
         frames = []
@@ -82,66 +110,65 @@ class VideoProcessor:
         return frames, size
 
     def main_worker(self, imgs, masks):  # M x 3 x H x W, M x 1 x H x W
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        with torch.no_grad():
+            frames = imgs
+            imgs = torch.from_numpy(imgs).permute(0, 3, 1, 2).float().unsqueeze(0) / 255.0
+            imgs = imgs * 2 - 1
+            processed_masks = self.process_masks(masks)
+            masks = to_tensors()(processed_masks).unsqueeze(0)
+            masks = masks.float()  # Ensure masks are float
 
-        if self.args.model == "e2fgvi":
-            size = (432, 240)
-        elif self.args.set_size:
-            size = (self.args.width, self.args.height)
-        else:
-            size = None
+            cpu_masks = masks.cpu().numpy().squeeze().astype(np.uint8)[..., None]
+            
+            imgs, masks = imgs.to(self.device), masks.to(self.device)
+            video_length = imgs.shape[1]
+            h, w = imgs.shape[3], imgs.shape[4]
+            # comp_frames = [None] * video_length
+            put_frame = [False] * video_length
+            comp_frames = np.zeros((video_length, h, w, 3))
 
-        net = importlib.import_module('model.' + self.args.model)
-        model = net.InpaintGenerator().to(device)
-        data = torch.load(self.args.ckpt, map_location=device)
-        model.load_state_dict(data)
-        model.eval()
-
-        imgs = imgs * 2 - 1
-        masks = masks.float()  # Ensure masks are float
-
-        video_length = imgs.size(0)
-        h, w = imgs.size(2), imgs.size(3)
-        comp_frames = [None] * video_length
-
-        for f in tqdm(range(0, video_length, self.neighbor_stride)):
-            neighbor_ids = [i for i in range(max(0, f - self.neighbor_stride), min(video_length, f + self.neighbor_stride + 1))]
-            ref_ids = self.get_ref_index(f, neighbor_ids, video_length)
-            selected_imgs = imgs[neighbor_ids + ref_ids]
-            selected_masks = masks[neighbor_ids + ref_ids]
-            with torch.no_grad():
+            for f in tqdm(range(0, video_length, self.neighbor_stride)):
+                neighbor_ids = [i for i in range(max(0, f - self.neighbor_stride), min(video_length, f + self.neighbor_stride + 1))]
+                ref_ids = self.get_ref_index(f, neighbor_ids, video_length)
+                selected_imgs = imgs[:1, neighbor_ids + ref_ids]
+                selected_masks = masks[:1, neighbor_ids + ref_ids]
                 masked_imgs = selected_imgs * (1 - selected_masks)
                 mod_size_h = 60
                 mod_size_w = 108
                 h_pad = (mod_size_h - h % mod_size_h) % mod_size_h
                 w_pad = (mod_size_w - w % mod_size_w) % mod_size_w
-                masked_imgs = torch.cat([masked_imgs, torch.flip(masked_imgs, [2])], 2)[:, :, :h + h_pad, :]
-                masked_imgs = torch.cat([masked_imgs, torch.flip(masked_imgs, [3])], 3)[:, :, :, :w + w_pad]
-                pred_imgs, _ = model(masked_imgs, len(neighbor_ids))
+                masked_imgs = torch.cat([masked_imgs, torch.flip(masked_imgs, [3])], 3)[:, :, :, :h + h_pad, :]
+                masked_imgs = torch.cat([masked_imgs, torch.flip(masked_imgs, [4])], 4)[:, :, :, :, :w + w_pad]
+                pred_imgs, _ = self.model(masked_imgs, len(neighbor_ids))
                 pred_imgs = pred_imgs[:, :, :h, :w]
                 pred_imgs = (pred_imgs + 1) / 2
                 pred_imgs = pred_imgs.cpu().permute(0, 2, 3, 1).numpy() * 255
                 for i in range(len(neighbor_ids)):
                     idx = neighbor_ids[i]
-                    img = np.array(pred_imgs[i]).astype(np.uint8) * masks[idx, 0].cpu().numpy() + imgs[idx].cpu().permute(1, 2, 0).numpy().astype(np.uint8) * (1 - masks[idx, 0].cpu().numpy())
-                    if comp_frames[idx] is None:
-                        comp_frames[idx] = img
-                    else:
+                    img = pred_imgs[i] * cpu_masks[idx] + frames[idx] * (1 - cpu_masks[idx])
+                    # if comp_frames[idx] is None:
+                    #     comp_frames[idx] = img
+                    # else:
+                    #     comp_frames[idx] = comp_frames[idx].astype(np.float32) * 0.5 + img.astype(np.float32) * 0.5
+                    if put_frame[idx]:
                         comp_frames[idx] = comp_frames[idx].astype(np.float32) * 0.5 + img.astype(np.float32) * 0.5
+                    else:
+                        comp_frames[idx] = img
+                        put_frame[idx] = True
 
-        self.save_video(comp_frames, size)
-        return comp_frames
+            # self.save_video(comp_frames, (256, 256))
+            return comp_frames.astype(np.uint8)
         
     def save_video(self, comp_frames, size):
         h, w = size[1], size[0]
         save_dir_name = 'results'
         ext_name = '_results.mp4'
-        save_base_name = self.args.video.split('/')[-1]
-        save_name = save_base_name.replace('.mp4', ext_name) if self.args.use_mp4 else save_base_name + ext_name
+        save_base_name = self.args['video.split']
+        save_name = save_base_name.replace('.mp4', ext_name) if self.args['use_mp4'] else save_base_name + ext_name
         if not os.path.exists(save_dir_name):
             os.makedirs(save_dir_name)
         save_path = os.path.join(save_dir_name, save_name)
-        writer = cv2.VideoWriter(save_path, cv2.VideoWriter_fourcc(*"mp4v"), self.args.savefps, (w, h))
+        writer = cv2.VideoWriter(save_path, cv2.VideoWriter_fourcc(*"mp4v"), self.args['savefps'], (w, h))
         for f in range(len(comp_frames)):
             comp = comp_frames[f].astype(np.uint8)
             writer.write(cv2.cvtColor(comp, cv2.COLOR_RGB2BGR))
