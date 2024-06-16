@@ -1,37 +1,31 @@
 import os
-import sys
-from tqdm import tqdm
-import logging
 import numpy as np
 import argparse
 import random
 import torch
-from torch.utils.data import DataLoader
 import torch.backends.cudnn as cudnn
-from utils import test_single_volume
 from importlib import import_module
 from segment_anything import sam_model_registry
-from datasets.robot_test_dataset import Test_Robot_dataset
-from torchvision.utils import save_image
 
 class InferenceManager:
     def __init__(self, args):
         self.args = args
         self.setup_seed()
-        self.setup_directories()
+        # self.setup_directories()
         self.setup_model()
 
     def setup_seed(self):
-        if not self.args.deterministic:
+        if not self.args['deterministic']:
             cudnn.benchmark = True
             cudnn.deterministic = False
         else:
             cudnn.benchmark = False
             cudnn.deterministic = True
-        random.seed(self.args.seed)
-        np.random.seed(self.args.seed)
-        torch.manual_seed(self.args.seed)
-        torch.cuda.manual_seed(self.args.seed)
+        seed = self.args['seed']
+        random.seed(seed)
+        np.random.seed(seed)
+        torch.manual_seed(seed)
+        torch.cuda.manual_seed(seed)
 
     def setup_directories(self):
         if not os.path.exists(self.args.output_dir):
@@ -47,35 +41,38 @@ class InferenceManager:
             self.test_saver2r_path = None
 
     def setup_model(self):
-        sam, img_embedding_size = sam_model_registry[self.args.vit_name](
-            image_size=self.args.img_size,
-            num_classes=self.args.num_classes,
-            checkpoint=self.args.ckpt
+        sam, img_embedding_size = sam_model_registry[self.args['vit_name']](
+            image_size=self.args['img_size'],
+            num_classes=self.args['num_classes'],
+            checkpoint=self.args['ckpt']
         )
-        pkg = import_module(self.args.module)
-        self.model = pkg.LoRA_Sam(sam, self.args.rank).cuda()
+        sam = sam.to(self.args['device'])
+        pkg = import_module(self.args['module'])
+        self.model = pkg.LoRA_Sam(sam, self.args['rank'])
 
-        assert self.args.lora_ckpt is not None
-        self.model.load_lora_parameters(self.args.lora_ckpt)
+        assert self.args['lora_ckpt'] is not None
+        self.model.load_lora_parameters(self.args['lora_ckpt'])
+        self.model = self.model.to(self.args['device'])
 
-        self.multimask_output = self.args.num_classes > 1
+        self.multimask_output = self.args['num_classes'] > 1
+        self.model.eval()
 
-    def inference(self, image, file):
-        self.model.eval() 
-        image = torch.nn.functional.upsample_bilinear(image.cuda().float() / 1.0, size=(self.args.img_size, self.args.img_size))
-        outputs = self.model(image, self.multimask_output, self.args.img_size)
+    def inference(self, images):
+        with torch.no_grad():
+            images = torch.nn.functional.upsample_bilinear(images.to(self.args['device']).float() / 1.0, size=(self.args['img_size'], self.args['img_size']))
+            outputs = self.model(images, self.multimask_output, self.args['img_size'])
 
-        output_masks = outputs['masks']
-        output_masks = torch.nn.functional.upsample_bilinear(output_masks.float(), size=(self.args.img_size, self.args.img_size))
-        output_masks = (output_masks[:, 1, :, :] > self.args.mask_threshold).unsqueeze(1)
+            output_masks = outputs['masks']
+            output_masks = torch.nn.functional.upsample_bilinear(output_masks.float(), size=(self.args['img_size'], self.args['img_size']))
+            output_masks = (output_masks[:, 1, :, :] > self.args['mask_threshold']).unsqueeze(1)
 
-        masked_image = (image / 255.0) * output_masks
+            masked_image = (images / 255.0) * output_masks
 
-        save_image(output_masks.float(), os.path.join(self.test_save_path, file[0]))
-        output_masks = output_masks.expand_as(image)
-        masked_image[output_masks == 0] = 1
-        save_image(masked_image, os.path.join(self.test_saver2r_path, file[0]))
-        return masked_image, output_masks
+            # save_image(output_masks.float(), os.path.join(self.test_save_path, file[0]))
+            output_masks = output_masks.expand_as(images)
+            masked_image[output_masks == 0] = 1
+            # save_image(masked_image, os.path.join(self.test_saver2r_path, file[0]))
+            return masked_image, output_masks
 
     @staticmethod
     def config_to_dict(config):
